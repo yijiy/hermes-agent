@@ -1,9 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
 
-vi.mock('@/components/onboarding-chat/setup-profile', async () => ({
-  $setupHandoff: (await import('nanostores')).atom(null)
-}))
-
 import type { HandoffReceipt } from './handoff-leg'
 import { handoffReceiptKey, readHandoffReceipt, saveHandoffReceipt } from './handoff-receipt'
 

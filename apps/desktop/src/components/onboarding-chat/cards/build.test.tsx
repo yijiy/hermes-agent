@@ -3,11 +3,11 @@ import { atom } from 'nanostores'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { PRIMARY_SESSION_VIEW, SessionViewProvider } from '@/app/chat/session-view'
-import { $handoffError, handoffReceiptKey, saveHandoffReceipt } from '@/app/contrib/handoff-receipt'
+import { handoffReceiptKey, saveHandoffReceipt } from '@/app/contrib/handoff-receipt'
 import { $onboardingGate, skipGuide } from '@/store/onboarding-gate'
 import { $activeSessionId, $selectedStoredSessionId, setSessionOwnerHint } from '@/store/session'
 
-import { $setupHandoff, resetSetupHandoffForTests } from '../setup-profile'
+import { $handoffError, $setupHandoff, resetSetupHandoffForTests } from '../setup-profile'
 
 import { HandoffCard, ProgressCard } from './build'
 
