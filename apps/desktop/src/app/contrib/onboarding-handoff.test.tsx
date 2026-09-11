@@ -95,13 +95,14 @@ import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
 
 import { retrySetupHandoff } from './handoff-receipt'
 import { type OnboardingHandoffOptions, useOnboardingHandoff } from './onboarding-handoff'
+import { type OnboardingKickoffOptions, useOnboardingKickoff } from './onboarding-kickoff'
 
 const task = { task: 'Tracker', brief: 'Build my tracker', plan: 'build' as const }
 
 function harness() {
   const states = new Map<string, ClientSessionState>()
 
-  const options: OnboardingHandoffOptions = {
+  const options: OnboardingHandoffOptions & OnboardingKickoffOptions = {
     activeSessionIdRef: { current: 'guide-runtime' },
     createBackendSessionForSend: vi.fn(async () => {
       $activeSessionId.set('build-runtime')
@@ -128,7 +129,12 @@ function harness() {
     runCreatePinnedTo: async (_profile, create) => create()
   }
 
-  const hook = renderHook(() => useOnboardingHandoff(options))
+  const hook = renderHook(() => {
+    const kickoff = useOnboardingKickoff(options)
+    useOnboardingHandoff(options)
+
+    return kickoff
+  })
 
   return { ...hook, options, states }
 }
