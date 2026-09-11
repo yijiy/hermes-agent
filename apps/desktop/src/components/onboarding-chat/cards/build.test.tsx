@@ -1,9 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { atom } from 'nanostores'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { PRIMARY_SESSION_VIEW, SessionViewProvider } from '@/app/chat/session-view'
-import { $handoffError } from '@/app/contrib/handoff-receipt'
+import { $handoffError, handoffReceiptKey, saveHandoffReceipt } from '@/app/contrib/handoff-receipt'
+import { $onboardingGate, skipGuide } from '@/store/onboarding-gate'
 import { $activeSessionId, $selectedStoredSessionId, setSessionOwnerHint } from '@/store/session'
 
 import { $setupHandoff, resetSetupHandoffForTests } from '../setup-profile'
@@ -16,6 +17,8 @@ vi.mock('@assistant-ui/react', () => ({
 }))
 
 beforeEach(() => {
+  localStorage.clear()
+  vi.stubGlobal('hermesDesktop', { guestOnboardingEnabled: true })
   $activeSessionId.set('guide-runtime')
   $selectedStoredSessionId.set('guide-stored')
   setSessionOwnerHint('guide-stored', { connectionId: 'guide-source', profile: 'hermes-setup' })
@@ -23,11 +26,16 @@ beforeEach(() => {
   $handoffError.set(null)
 })
 
-it('waits for a settled directive and raises the handoff once across remounts', async () => {
+afterEach(() => vi.unstubAllGlobals())
+
+it.each(['guided', 'done'] as const)('uses the receipt across remounts after a %s phase', async phase => {
+  $onboardingGate.set({ phase, guideQueued: false })
+  skipGuide()
   const attrs = { task: 'Tracker', brief: 'Build my tracker', plan: 'plugin' }
   const { rerender, unmount } = render(<HandoffCard attrs={attrs} locked />)
 
   expect($setupHandoff.get()).toBeNull()
+  expect(screen.queryByText(/was started/)).toBeNull()
   rerender(<HandoffCard attrs={attrs} locked={false} />)
   await waitFor(() => expect($setupHandoff.get()).not.toBeNull())
   const requested = $setupHandoff.get()
@@ -42,8 +50,21 @@ it('waits for a settled directive and raises the handoff once across remounts', 
     }
   })
   unmount()
-  render(<HandoffCard attrs={attrs} locked={false} />)
+  const remount = render(<HandoffCard attrs={attrs} locked={false} />)
   expect($setupHandoff.get()).toBe(requested)
+  remount.unmount()
+  saveHandoffReceipt(handoffReceiptKey('guide-source', 'guide-stored'), {
+    ...attrs,
+    plan: 'plugin',
+    status: 'accepted',
+    owner: { connectionId: 'guide-source', profile: 'default' },
+    runtimeId: 'build-runtime',
+    storedId: 'build-stored'
+  })
+  resetSetupHandoffForTests()
+  render(<HandoffCard attrs={attrs} locked />)
+  expect(screen.getByText('Tracker was started — find it in your sessions')).toBeTruthy()
+  expect($setupHandoff.get()).toBeNull()
 })
 
 it('shows the actual failure and a deliberate retry rather than claiming an alternate build', () => {

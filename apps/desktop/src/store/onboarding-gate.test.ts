@@ -97,17 +97,28 @@ describe('onboarding phase record', () => {
     expect(hasSeenIntroReveal()).toBe(true)
   })
 
-  it('skips from cinematic to done without letting the intro close requeue the guide', async () => {
+  it.each(['cinematic', 'guided'] as const)('persists a skipped %s guide without requeueing it', async phase => {
     enableOnboarding()
     render(createElement(IntroRevealGate, { enabled: true }))
     expect($onboardingGate.get().phase).toBe('cinematic')
+    act(() => $onboardingGate.set({ phase, guideQueued: false }))
     skipGuide()
     act(finishIntroReveal)
     queueGuideAfterIntro()
     const kickoff = vi.fn().mockResolvedValue(true)
     expect(await runGuideKickoff(kickoff)).toBe(false)
     expect(kickoff).not.toHaveBeenCalled()
-    expect($onboardingGate.get()).toEqual({ phase: 'done', guideQueued: false })
+    expect($onboardingGate.get()).toEqual({ phase: 'skipped', guideQueued: false })
+
+    vi.resetModules()
+    const reloaded = await import('./onboarding-gate')
+    reloaded.beginOnboardingFlow()
+    reloaded.completeOnboardingFlow()
+    expect(reloaded.$onboardingGate.get()).toEqual({ phase: 'skipped', guideQueued: false })
+    reloaded.beginOnboardingHandoff()
+    expect(reloaded.$onboardingGate.get().phase).toBe('handoff')
+    reloaded.completeOnboardingFlow()
+    expect(reloaded.$onboardingGate.get().phase).toBe('done')
   })
 
   it('shares one pending kickoff and retries failure without latching a guide that never started', async () => {

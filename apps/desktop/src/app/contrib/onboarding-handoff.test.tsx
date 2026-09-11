@@ -76,19 +76,24 @@ import type { SessionCreateOverrides } from '@/app/session/hooks/use-session-act
 import type { ClientSessionState } from '@/app/types'
 import * as assembly from '@/components/onboarding-chat/assembly'
 import { $chatOnboardingSolo, $onboardingGreeting } from '@/components/onboarding-chat/assembly'
-import { $setupHandoff, $setupSession, resetSetupHandoffForTests } from '@/components/onboarding-chat/setup-profile'
+import {
+  $setupHandoff,
+  $setupSession,
+  requestSetupHandoff,
+  resetSetupHandoffForTests
+} from '@/components/onboarding-chat/setup-profile'
 import { group } from '@/components/pane-shell/tree/model'
 import { applyLayoutPreset } from '@/components/pane-shell/tree/presets'
 import { $layoutTree } from '@/components/pane-shell/tree/store'
 import { createClientSessionState } from '@/lib/chat-runtime'
 import { $onboardingAnswers, DEFAULT_ANSWERS } from '@/store/onboarding-answers'
-import { $onboardingGate, devResetOnboardingFlow } from '@/store/onboarding-gate'
+import { $onboardingGate, devResetOnboardingFlow, skipGuide } from '@/store/onboarding-gate'
 import { onboardingSurfaceActive } from '@/store/onboarding-presence'
 import { buildChatOnboardingSeedMessages } from '@/store/onboarding-script'
 import { $activeGatewayProfile, $newChatProfile, $newChatRoute } from '@/store/profile'
 import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
 
-import { retrySetupHandoff } from './handoff-receipt'
+import { handoffReceiptKey, readHandoffReceipt, retrySetupHandoff, saveHandoffReceipt } from './handoff-receipt'
 import { type OnboardingHandoffOptions, useOnboardingHandoff } from './onboarding-handoff'
 import { type OnboardingKickoffOptions, useOnboardingKickoff } from './onboarding-kickoff'
 
@@ -180,6 +185,48 @@ beforeEach(() => {
 })
 
 describe('the real onboarding handoff effect', () => {
+  it('starts a first build after skipping the guide and completes only on acceptance', async () => {
+    const h = harness()
+    const guide = $setupSession.get()!
+    skipGuide()
+
+    act(() => expect(requestSetupHandoff(task.task, task.brief, task.plan, guide)).toBe(true))
+    await waitFor(() => expect($setupHandoff.get()?.phase).toBe('error'))
+    expect(h.options.createBackendSessionForSend).toHaveBeenCalledTimes(1)
+    expect($onboardingGate.get().phase).toBe('handoff')
+
+    mocks.request.mockImplementation(async (_connection, _profile, method) =>
+      method === 'session.resume'
+        ? { session_id: 'build-runtime-2', session_key: 'build-stored', running: false, messages: [] }
+        : { status: 'streaming' }
+    )
+    act(retrySetupHandoff)
+    await waitFor(() => expect($setupHandoff.get()?.phase).toBe('done'))
+    expect(readHandoffReceipt(handoffReceiptKey(guide.connectionId, guide.storedId!))?.status).toBe('accepted')
+    expect($onboardingGate.get().phase).toBe('done')
+    expect(h.options.createBackendSessionForSend).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses the accepted receipt on reload even before the phase catches up', async () => {
+    const guide = $setupSession.get()!
+    saveHandoffReceipt(handoffReceiptKey(guide.connectionId, guide.storedId!), {
+      ...task,
+      status: 'accepted',
+      owner: { connectionId: guide.connectionId, profile: 'default' },
+      runtimeId: 'build-runtime',
+      storedId: 'build-stored'
+    })
+    $onboardingGate.set({ phase: 'handoff', guideQueued: false })
+    resetSetupHandoffForTests()
+
+    expect(requestSetupHandoff(task.task, task.brief, task.plan, guide)).toBe(false)
+    const resumed = harness()
+    await waitFor(() => expect($setupHandoff.get()?.phase).toBe('done'))
+    expect($onboardingGate.get().phase).toBe('done')
+    expect(resumed.options.createBackendSessionForSend).not.toHaveBeenCalled()
+    expect(mocks.request).not.toHaveBeenCalled()
+  })
+
   it('leaves the classic onboarding profiles unchanged when the guide is not ready', async () => {
     $newChatProfile.set('default')
     $activeGatewayProfile.set('default')
@@ -298,7 +345,7 @@ describe('the real onboarding handoff effect', () => {
     expect($layoutTree.get()).toEqual(tree)
     expect($onboardingGreeting.get()).toBe('')
     expect(onboardingSurfaceActive()).toBe(false)
-    expect($onboardingGate.get()).toEqual({ phase: 'done', guideQueued: false })
+    expect($onboardingGate.get()).toEqual({ phase: 'skipped', guideQueued: false })
     expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ kind: 'error' }))
     expect(mocks.ensure).toHaveBeenLastCalledWith('source-a', 'launch')
   })
