@@ -76,12 +76,7 @@ import type { SessionCreateOverrides } from '@/app/session/hooks/use-session-act
 import type { ClientSessionState } from '@/app/types'
 import * as assembly from '@/components/onboarding-chat/assembly'
 import { $chatOnboardingSolo, $onboardingGreeting } from '@/components/onboarding-chat/assembly'
-import {
-  $setupHandoff,
-  $setupSession,
-  hasCompletedSetupHandoff,
-  resetSetupHandoffForTests
-} from '@/components/onboarding-chat/setup-profile'
+import { $setupHandoff, $setupSession, resetSetupHandoffForTests } from '@/components/onboarding-chat/setup-profile'
 import { group } from '@/components/pane-shell/tree/model'
 import { applyLayoutPreset } from '@/components/pane-shell/tree/presets'
 import { $layoutTree } from '@/components/pane-shell/tree/store'
@@ -321,10 +316,14 @@ describe('the real onboarding handoff effect', () => {
   })
 
   it('surfaces rejection, saves facts before create, then retries the SAME build with its exact owner', async () => {
+    // Isolate handoff persistence from the preceding kickoff tests' restored layout.
+    $layoutTree.set(null)
     const h = harness()
     act(() => $setupHandoff.set({ ...task, phase: 'pending' }))
     await waitFor(() => expect($setupHandoff.get()?.phase).toBe('error'))
-    expect(hasCompletedSetupHandoff()).toBe(false)
+    // SAFETY: A refused start keeps onboarding in handoff until the receipt is accepted.
+    expect($onboardingGate.get().phase).toBe('handoff')
+    const persistedKeys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).sort()
     expect(mocks.watch).not.toHaveBeenCalled()
     expect(h.states.get('build-runtime')).toMatchObject({ busy: false, awaitingResponse: false, messages: [] })
     expect(h.options.createBackendSessionForSend).toHaveBeenCalledWith(task.brief, expect.any(Array))
@@ -352,8 +351,11 @@ describe('the real onboarding handoff effect', () => {
     await waitFor(() => expect($setupHandoff.get()?.phase).toBe('done'))
     expect(h.options.createBackendSessionForSend).toHaveBeenCalledTimes(1)
     expect(mocks.request.mock.calls.some(([connection]) => connection === 'source-b')).toBe(false)
-    expect(hasCompletedSetupHandoff()).toBe(true)
+    // SAFETY: Acceptance advances the existing phase record without adding a second latch.
     expect($onboardingGate.get().phase).toBe('done')
+    expect(Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index)).sort()).toEqual(
+      persistedKeys
+    )
     expect(h.options.activeSessionIdRef.current).toBe('build-runtime-2')
     expect(mocks.tile).toHaveBeenCalledWith('build-stored', {
       runtimeId: 'build-runtime-2',
@@ -431,7 +433,8 @@ describe('the real onboarding handoff effect', () => {
     const h = harness()
     act(() => $setupHandoff.set({ ...task, phase: 'pending' }))
     await waitFor(() => expect($setupHandoff.get()?.phase).toBe('error'))
-    expect(hasCompletedSetupHandoff()).toBe(false)
+    // SAFETY: A lost acknowledgment cannot complete onboarding before receipt recovery.
+    expect($onboardingGate.get().phase).toBe('handoff')
     h.unmount()
     // Relaunch into the guide's replayed transcript: no beacon or transient
     // setup pointer survives. The durable receipt alone restores recovery.
