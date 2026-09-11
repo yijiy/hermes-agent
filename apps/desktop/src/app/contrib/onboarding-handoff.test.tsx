@@ -68,7 +68,7 @@ vi.mock('@/store/session', async () => {
     setMessages: vi.fn(),
     setSessionOwnerHint: vi.fn(),
     forgetSessionOwnerHintsForSession: vi.fn(),
-    getSessionOwnerHint: () => ({ connectionId: 'source-a', profile: 'default' })
+    getSessionOwnerHint: vi.fn()
   }
 })
 
@@ -92,7 +92,7 @@ import { $onboardingGate, devResetOnboardingFlow, skipGuide } from '@/store/onbo
 import { onboardingSurfaceActive } from '@/store/onboarding-presence'
 import { buildChatOnboardingSeedMessages } from '@/store/onboarding-script'
 import { $activeGatewayProfile, $newChatProfile, $newChatRoute } from '@/store/profile'
-import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
+import { $activeSessionId, $selectedStoredSessionId, getSessionOwnerHint } from '@/store/session'
 
 import { handoffReceiptKey, readHandoffReceipt, saveHandoffReceipt } from './handoff-receipt'
 import { type OnboardingHandoffOptions, useOnboardingHandoff } from './onboarding-handoff'
@@ -154,6 +154,7 @@ beforeEach(() => {
   $chatOnboardingSolo.set(false)
   vi.clearAllMocks()
   mocks.connectionId = 'source-a'
+  vi.mocked(getSessionOwnerHint).mockReturnValue({ connectionId: 'source-a', profile: 'default' })
   $activeGatewayProfile.set('hermes-setup')
   $newChatProfile.set('hermes-setup')
   $setupSession.set({
@@ -186,6 +187,43 @@ beforeEach(() => {
 })
 
 describe('the real onboarding handoff effect', () => {
+  it('recovers an ambient guide receipt by stored identity when an active connection has no owner hint', async () => {
+    vi.mocked(getSessionOwnerHint).mockReturnValue(undefined)
+    const guide = { ...$setupSession.get()!, connectionId: null }
+    mocks.request.mockImplementation(async (_connection, _profile, method) =>
+      method === 'profiles.remember_onboarding'
+        ? { saved: true, profile: 'default', target: 'user' }
+        : { status: 'streaming' }
+    )
+    const h = harness()
+
+    act(() => expect(requestSetupHandoff(task.task, task.brief, task.plan, guide)).toBe(true))
+    await waitFor(() => expect($setupHandoff.get()?.phase).toBe('done'))
+    expect(h.options.createBackendSessionForSend).toHaveBeenCalledTimes(1)
+    expect(readHandoffReceipt(handoffReceiptKey(mocks.connectionId, guide.storedId!))).toMatchObject({
+      status: 'accepted',
+      owner: { connectionId: null, profile: 'default' }
+    })
+    expect(mocks.request).toHaveBeenCalledWith(
+      null,
+      'default',
+      'prompt.submit',
+      { session_id: 'build-runtime', text: task.brief },
+      expect.anything()
+    )
+
+    h.unmount()
+    resetSetupHandoffForTests()
+    $activeSessionId.set(guide.runtimeId)
+    $selectedStoredSessionId.set(guide.storedId)
+    expect(requestSetupHandoff(task.task, task.brief, task.plan, guide)).toBe(false)
+    const calls = mocks.request.mock.calls.length
+    const resumed = harness()
+    await waitFor(() => expect($setupHandoff.get()?.phase).toBe('done'))
+    expect(resumed.options.createBackendSessionForSend).not.toHaveBeenCalled()
+    expect(mocks.request.mock.calls).toHaveLength(calls)
+  })
+
   it('starts a first build after skipping the guide and completes only on acceptance', async () => {
     const h = harness()
     const guide = $setupSession.get()!
